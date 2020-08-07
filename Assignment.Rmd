@@ -1,0 +1,189 @@
+---
+title: "Assignment"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Prediction Assignment
+
+### Synopsis
+
+This assignment is to reproduce the classification analysis by PUC university in Rio, Brazil.
+They provided the dataset and authored 
+
+The goal of this project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set.
+
+### Loading and preprocessing the data
+Training Dataset: [Training Data][1]
+Testing Dataset: [Testing Data][2]
+
+[1]: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+[2]: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+Load libraries
+```{r}
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(lattice)
+library(caret)
+library(randomForest)
+```
+
+Download training and test data
+```{r}
+train_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+train_file <- "training.csv"
+if (!file.exists(train_file)) {
+  download.file(train_url, train_file, method="curl")
+}
+test_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+test_file <- "testing.csv"
+if (!file.exists(test_file)) {
+  download.file(test_url, test_file, method="curl")
+}
+
+```
+Load the datasets
+```{r}
+training <- read.csv(train_file)
+testing <- read.csv(test_file)
+```
+
+Let's see how many variables and observations are included
+```{r}
+dim(training)
+dim(testing)
+```
+
+#### Cleaning Data
+I see 160 variables, many of which have NAs. Many variables are not needed.
+Lets create another dataframe with only relevant variables.
+
+```{r}
+# remove the first 7 variables as they are not relevant for classification.
+training2 <- training[ , -(1:7)]
+testing2 <- testing[ , -(1:7)]
+
+unique(colSums(is.na(training2))/nrow(training2))
+
+# Remove variables with no information
+valid_cols <- colSums(is.na(training2)/dim(training2)) == 0
+training2 <- training2[, valid_cols]
+# Same for testing data
+testing2 <- testing2[, valid_cols]
+
+# Remove empty char columns
+valid_cols <- colSums(training2 == "") == 0
+training2 <- training2[, valid_cols]
+# Same for testing data
+testing2 <- testing2[, valid_cols]
+
+dim(training2)
+```
+Testing2 should have the same # of variables
+
+```{r}
+dim(testing2)
+```
+
+### Split data for validation with multiple models
+
+My goal is to evaluate at-least two models so lets split the training set into train and validate subsets
+```{r}
+# Need reproducible split
+set.seed(325)
+inTrain <- createDataPartition(training2$classe, p=0.75, list=FALSE)
+
+training <- training2[inTrain, ]
+validation <- training2[-inTrain, ]
+
+dim(training)
+```
+
+```{r}
+dim(validation)
+```
+
+
+### Train model using Random Forest Model
+
+```{r cache=TRUE}
+train_control <- trainControl(method="cv", 5)
+mod_rf <- train(classe ~ ., method="rf", data=training, trControl=train_control)
+
+mod_rf
+```
+
+### Plot the variable Importance 
+```{r}
+varImpPlot(mod_rf$finalModel, sort = TRUE, pch = 19, col = 1, cex = 0.6, 
+           main = "Importance of the Individual Variables")
+```
+
+
+### Check the error rate of model for validation data
+```{r}
+valid_pred <- predict(mod_rf, validation)
+confusionMatrix(as.factor(validation$classe), valid_pred)
+```
+
+We see that model accuracy is 99.3% for validation data.
+
+
+We also see that following variables have the most impact on the model.
+- roll_best
+- pitch_forearm
+- yaw_belt
+- magnet_dumbbell_z
+- pitch_belt
+- magnet_dumbbell_y
+- roll_forearm
+
+Lets prune the model to focus only on these imp variable. We can recheck the affect on accuracy.
+
+```{r cache=TRUE}
+imp_cols <- c("roll_belt", "pitch_forearm", "yaw_belt", "magnet_dumbbell_z", 
+               "pitch_belt", "magnet_dumbbell_y", "roll_forearm")
+imp_train <- training[ ,imp_cols]
+imp_train$classe <- training$classe
+
+imp_valid <- validation[ ,imp_cols]
+imp_valid$classe <- validation$classe
+
+imp_test <- testing2[ ,imp_cols]
+imp_test$problem_id <- testing2$problem_id
+
+imp_model_rf <- train(classe ~ ., method="rf", data=imp_train, trControl=train_control)
+
+imp_model_rf
+
+```
+
+Note that model accuracy is still 98.2%.
+Lets check the error rate of this (hopefully) compressed model.
+### Check the error rate of model for validation data
+```{r}
+valid_pred <- predict(imp_model_rf, imp_valid)
+confusionMatrix(as.factor(imp_valid$classe), valid_pred)
+```
+
+### Predict the test data
+
+Now lets predict the test data
+```{r}
+test_pred <- predict(mod_rf, newdata=testing2)
+```
+
+### Results
+
+The testing data is predicted as follows. The model has an accuracy of 99.3%.
+```{r}
+test_pred
+```
+
+### Summary
+My summary is that Random Forest method provides very accurate model. We created two models, first one as full featured random forest and a second one, another random forest model but only with high ranked variables. The second model has only 7 variables compared to 53 in the first one and yet it retains a ~99% accuracy.
